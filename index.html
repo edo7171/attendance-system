@@ -139,6 +139,9 @@
   }
   .att-box.on{background:var(--teal); border-color:var(--teal);}
   .att-time{font-size:.68rem; color:var(--teal-dark); margin-top:2px; line-height:1; font-variant-numeric:tabular-nums;}
+  .phone-cell{white-space:nowrap; font-variant-numeric:tabular-nums;}
+  .phone-link{color:var(--teal-dark); text-decoration:none;}
+  .phone-link:hover{text-decoration:underline;}
   .col-idx{width:34px; color:var(--ink-soft);}
   .col-actions{width:36px;}
   .sess-group{ border-inline-end:1px solid rgba(255,255,255,.25); }
@@ -454,6 +457,7 @@ async function addParticipant(courseId, data){
     firstName: data.firstName,
     lastName: data.lastName,
     teudatZehut: data.teudatZehut,
+    phone: data.phone || "",
     branchId: data.branchId || "",
     branchName: data.branchName || "",
     notes: "",
@@ -500,7 +504,7 @@ async function exportToExcel(){
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("נוכחות", { views: [{ rightToLeft: true }] });
 
-  const header = ["שם פרטי","שם משפחה","ת.ז","סניף"];
+  const header = ["שם פרטי","שם משפחה","ת.ז","טלפון","סניף"];
   sessions.forEach((s,i)=>{
     const label = (s.date ? formatDate(s.date) : ("מפגש "+(i+1)));
     header.push(label + " - התחלה");
@@ -515,10 +519,10 @@ async function exportToExcel(){
     cell.alignment = { horizontal:"center", vertical:"middle", wrapText:true };
   });
 
-  const fixedColsCount = 4; // first name, last name, id, branch
+  const fixedColsCount = 5; // first name, last name, id, phone, branch
 
   state.participants.forEach(p=>{
-    const row = [p.firstName||"", p.lastName||"", p.teudatZehut||"", p.branchName||""];
+    const row = [p.firstName||"", p.lastName||"", p.teudatZehut||"", p.phone||"", p.branchName||""];
     let attendedSessions = 0;
     sessions.forEach((s,i)=>{
       const att = (p.attendance && p.attendance[i]) || {};
@@ -547,6 +551,11 @@ async function exportToExcel(){
         }
       });
     });
+
+    // phone column: keep as text so a leading zero isn't dropped
+    const phoneCell = addedRow.getCell(4);
+    phoneCell.numFmt = "@";
+    phoneCell.alignment = { horizontal:"center" };
 
     // percentage column: last column, formatted as a real Excel percentage
     const pctCell = addedRow.getCell(header.length);
@@ -805,6 +814,7 @@ function renderAddParticipantModal(){
   modal.appendChild(el("div",{class:"field"},[el("label",{},["שם פרטי"]), el("input",{type:"text", id:"p_first"})]));
   modal.appendChild(el("div",{class:"field"},[el("label",{},["שם משפחה"]), el("input",{type:"text", id:"p_last"})]));
   modal.appendChild(el("div",{class:"field"},[el("label",{},["ת.ז"]), el("input",{type:"text", id:"p_id", maxlength:"9"})]));
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["מספר טלפון"]), el("input",{type:"tel", id:"p_phone", inputmode:"tel", placeholder:"050-0000000"})]));
 
   const branchField = el("div",{class:"field"});
   branchField.appendChild(el("label",{},["סניף"]));
@@ -827,6 +837,7 @@ function renderAddParticipantModal(){
     const firstName = document.getElementById("p_first").value.trim();
     const lastName = document.getElementById("p_last").value.trim();
     const teudatZehut = document.getElementById("p_id").value.trim();
+    const phone = document.getElementById("p_phone").value.trim();
     if(!firstName || !lastName){ showBanner("יש להזין שם פרטי ושם משפחה.", "error"); return; }
     let branchId="", branchName="";
     const selectEl = document.getElementById("p_branch");
@@ -839,7 +850,7 @@ function renderAddParticipantModal(){
     }
     saveBtn.disabled = true;
     try{
-      await addParticipant(state.currentCourseId, {firstName, lastName, teudatZehut, branchId, branchName});
+      await addParticipant(state.currentCourseId, {firstName, lastName, teudatZehut, phone, branchId, branchName});
       state.showAddParticipant = false;
       clearBanner();
       render();
@@ -892,6 +903,7 @@ function renderDetail(){
     el("th",{rowspan:"2"},["שם פרטי"]),
     el("th",{rowspan:"2"},["שם משפחה"]),
     el("th",{rowspan:"2"},["ת.ז"]),
+    el("th",{rowspan:"2"},["טלפון"]),
     el("th",{rowspan:"2"},["סניף"]),
   ]);
   sessions.forEach((s,i)=>{
@@ -918,6 +930,9 @@ function renderDetail(){
     tr.appendChild(el("td",{class:"name-cell"},[p.firstName||""]));
     tr.appendChild(el("td",{class:"name-cell"},[p.lastName||""]));
     tr.appendChild(el("td",{},[p.teudatZehut||""]));
+    tr.appendChild(el("td",{class:"phone-cell"},[
+      p.phone ? el("a",{href:"tel:"+String(p.phone).replace(/[^\d+]/g,""), class:"phone-link"},[p.phone]) : ""
+    ]));
     tr.appendChild(el("td",{},[p.branchName||""]));
 
     sessions.forEach((s,i)=>{
