@@ -138,6 +138,7 @@
     display:flex; align-items:center; justify-content:center; font-size:.75rem; color:#fff; font-weight:700;
   }
   .att-box.on{background:var(--teal); border-color:var(--teal);}
+  .att-time{font-size:.68rem; color:var(--teal-dark); margin-top:2px; line-height:1; font-variant-numeric:tabular-nums;}
   .col-idx{width:34px; color:var(--ink-soft);}
   .col-actions{width:36px;}
   .sess-group{ border-inline-end:1px solid rgba(255,255,255,.25); }
@@ -448,7 +449,7 @@ async function addParticipant(courseId, data){
   const attendance = {};
   const course = state.courses.find(c=>c.id===courseId);
   const sessionCount = course && course.sessions ? course.sessions.length : 0;
-  for(let i=0;i<sessionCount;i++){ attendance[i] = {start:false, end:false}; }
+  for(let i=0;i<sessionCount;i++){ attendance[i] = {start:false, end:false, startTime:"", endTime:""}; }
   await dbKorsim.collection("courses").doc(courseId).collection("participants").add({
     firstName: data.firstName,
     lastName: data.lastName,
@@ -472,10 +473,19 @@ async function updateParticipantField(courseId, participantId, field, value){
   await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).update(update);
 }
 
+function nowTimeString(){
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2,"0");
+  const mm = String(d.getMinutes()).padStart(2,"0");
+  return hh + ":" + mm;
+}
+
 async function toggleAttendance(courseId, participantId, sessionIdx, which, currentVal){
-  const path = "attendance." + sessionIdx + "." + which;
+  const newVal = !currentVal;
   const update = {};
-  update[path] = !currentVal;
+  update["attendance." + sessionIdx + "." + which] = newVal;
+  // record the moment the check was made; clear it when unchecking
+  update["attendance." + sessionIdx + "." + which + "Time"] = newVal ? nowTimeString() : "";
   await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).update(update);
 }
 
@@ -513,8 +523,10 @@ async function exportToExcel(){
     sessions.forEach((s,i)=>{
       const att = (p.attendance && p.attendance[i]) || {};
       if(att.start || att.end) attendedSessions++;
-      row.push(att.start ? "נכח" : "לא נכח");
-      row.push(att.end ? "נכח" : "לא נכח");
+      ["start","end"].forEach(which=>{
+        const markedAt = att[which+"Time"] || "";
+        row.push(att[which] ? ("נכח" + (markedAt ? " " + markedAt : "")) : "לא נכח");
+      });
     });
     row.push(p.notes||"", p.feedback||"");
     const pct = sessions.length ? (attendedSessions / sessions.length) : 0;
@@ -543,7 +555,7 @@ async function exportToExcel(){
   });
 
   sheet.columns.forEach((col, i)=>{
-    col.width = (i < fixedColsCount) ? 16 : 14;
+    col.width = (i < fixedColsCount) ? 16 : 16;
   });
   sheet.getColumn(header.length - 2).width = 24; // הערות
   sheet.getColumn(header.length - 1).width = 24; // חוות דעת
@@ -912,14 +924,21 @@ function renderDetail(){
       const att = (p.attendance && p.attendance[i]) || {start:false,end:false};
       ["start","end"].forEach(which=>{
         const on = !!att[which];
+        const markedAt = att[which+"Time"] || "";
         const box = el("div",{class:"att-box"+(on?" on":"")},[on?"✓":""]);
-        const td = el("td",{class:"att-cell"+(which==="end"?" sess-end":""), title: which==="start"?"נוכחות בתחילת המפגש":"נוכחות בסיום המפגש", onclick: async ()=>{
+        const cellContent = [box];
+        if(on && markedAt){
+          cellContent.push(el("div",{class:"att-time"},[markedAt]));
+        }
+        const tip = (which==="start" ? "נוכחות בתחילת המפגש" : "נוכחות בסיום המפגש")
+                    + (on && markedAt ? " · סומן ב-" + markedAt : "");
+        const td = el("td",{class:"att-cell"+(which==="end"?" sess-end":""), title: tip, onclick: async ()=>{
           try{
             await toggleAttendance(state.currentCourseId, p.id, i, which, on);
           }catch(e){
             showBanner("שגיאה בעדכון נוכחות: "+e.message,"error");
           }
-        }},[box]);
+        }}, cellContent);
         tr.appendChild(td);
       });
     });
