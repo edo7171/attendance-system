@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מערכת ניהול נוכחות בקורסים</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-auth-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<style>
+  :root{
+    --ink:#152238;
+    --ink-soft:#3d4a63;
+    --bg:#F1F4F7;
+    --surface:#FFFFFF;
+    --border:#DCE3EA;
+    --teal:#1F7A72;
+    --teal-dark:#155C56;
+    --amber:#C98A2C;
+    --coral:#C4553F;
+    --shadow: 0 1px 2px rgba(21,34,56,.06), 0 4px 14px rgba(21,34,56,.06);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family: "Segoe UI", "Heebo", "Arial Hebrew", Arial, sans-serif;
+    min-height:100vh;
+  }
+  #app{max-width:1180px;margin:0 auto;padding:28px 22px 60px;}
+
+  .top-bar{
+    display:flex; align-items:baseline; justify-content:space-between;
+    border-bottom:2px solid var(--ink);
+    padding-bottom:14px; margin-bottom:26px;
+  }
+  .top-bar h1{
+    font-size:1.5rem; margin:0; font-weight:700; letter-spacing:-0.01em;
+  }
+  .top-bar .sub{color:var(--ink-soft); font-size:.85rem; margin-top:4px;}
+  .top-bar .brand{display:flex; flex-direction:column;}
+
+  button{
+    font-family:inherit; cursor:pointer; border:none; border-radius:6px;
+    padding:9px 16px; font-size:.9rem; font-weight:600;
+    transition:background .15s ease, transform .05s ease;
+  }
+  button:active{transform:translateY(1px);}
+  .btn-primary{background:var(--teal); color:#fff;}
+  .btn-primary:hover{background:var(--teal-dark);}
+  .btn-ghost{background:transparent; color:var(--ink); border:1px solid var(--border);}
+  .btn-ghost:hover{background:#fff; border-color:var(--ink-soft);}
+  .btn-danger{background:transparent; color:var(--coral); border:1px solid var(--coral);}
+  .btn-danger:hover{background:var(--coral); color:#fff;}
+  .btn-small{padding:5px 10px; font-size:.78rem; border-radius:5px;}
+  button:disabled{opacity:.5; cursor:not-allowed;}
+
+  .panel{
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    box-shadow:var(--shadow); padding:22px;
+  }
+
+  .banner{
+    padding:12px 16px; border-radius:8px; font-size:.88rem; margin-bottom:18px;
+    border:1px solid transparent;
+  }
+  .banner.error{background:#FBEAE6; color:#8B3524; border-color:#EFC5B8;}
+  .banner.info{background:#EAF3F2; color:#155C56; border-color:#C7E1DD;}
+
+  /* ---- Courses list ---- */
+  .courses-header{display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;}
+  .course-grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(240px,1fr)); gap:14px;}
+  .course-card{
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:16px 18px; cursor:pointer; box-shadow:var(--shadow);
+    display:flex; flex-direction:column; gap:6px; transition:border-color .15s;
+  }
+  .course-card:hover{border-color:var(--teal);}
+  .course-card h3{margin:0; font-size:1.05rem;}
+  .course-card .meta{font-size:.8rem; color:var(--ink-soft);}
+  .empty-state{
+    text-align:center; padding:50px 20px; color:var(--ink-soft);
+    border:1px dashed var(--border); border-radius:10px; background:var(--surface);
+  }
+
+  /* ---- Create course form ---- */
+  .field{margin-bottom:16px;}
+  .field label{display:block; font-size:.82rem; font-weight:600; color:var(--ink-soft); margin-bottom:5px;}
+  .field input, .field select, .field textarea{
+    width:100%; padding:9px 10px; border:1px solid var(--border); border-radius:6px;
+    font-size:.92rem; font-family:inherit; background:#fcfdfe; color:var(--ink);
+  }
+  .field input:focus, .field select:focus, .field textarea:focus{
+    outline:2px solid var(--teal); outline-offset:1px; border-color:var(--teal);
+  }
+  .row-2{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  .row-3{display:grid; grid-template-columns:1.4fr 1fr 1fr; gap:10px;}
+
+  .sessions-list{display:flex; flex-direction:column; gap:10px; margin-bottom:18px;}
+  .session-row{
+    display:grid; grid-template-columns:28px 1.4fr 1fr 1fr; gap:10px; align-items:center;
+    background:#F8FAFB; border:1px solid var(--border); border-radius:8px; padding:8px 10px;
+  }
+  .session-row .idx{font-size:.8rem; font-weight:700; color:var(--ink-soft); text-align:center;}
+
+  .form-actions{display:flex; gap:10px; justify-content:flex-start; margin-top:6px;}
+
+  /* ---- Course detail ---- */
+  .detail-header{display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:18px; flex-wrap:wrap; gap:10px;}
+  .detail-header h2{margin:0 0 4px 0;}
+  .detail-header .meta{color:var(--ink-soft); font-size:.85rem;}
+  .detail-actions{display:flex; gap:10px; flex-wrap:wrap;}
+
+  .table-wrap{overflow-x:auto; border:1px solid var(--border); border-radius:10px; background:var(--surface); box-shadow:var(--shadow);}
+  table{border-collapse:collapse; width:100%; font-size:.85rem; min-width:900px;}
+  thead th{
+    background:var(--ink); color:#fff; padding:8px 8px; text-align:center; white-space:nowrap;
+    position:sticky; top:0; z-index:2;
+  }
+  thead tr.session-head th{background:#243453;}
+  tbody td{
+    padding:6px 7px; border-bottom:1px solid var(--border); text-align:center; vertical-align:middle;
+  }
+  tbody tr:hover{background:#F7FAFA;}
+  td.name-cell{text-align:right; font-weight:600; white-space:nowrap;}
+  td input[type="text"], td textarea{
+    width:100%; border:1px solid transparent; border-radius:5px; padding:5px 6px;
+    font-family:inherit; font-size:.83rem; background:transparent; resize:vertical;
+  }
+  td input[type="text"]:hover, td textarea:hover{border-color:var(--border); background:#fcfdfe;}
+  td input[type="text"]:focus, td textarea:focus{outline:none; border-color:var(--teal); background:#fff;}
+  td textarea{min-height:34px;}
+  .att-cell{cursor:pointer;}
+  .att-box{
+    width:22px; height:22px; border:2px solid #B9C3CE; border-radius:5px; margin:0 auto;
+    display:flex; align-items:center; justify-content:center; font-size:.75rem; color:#fff; font-weight:700;
+  }
+  .att-box.on{background:var(--teal); border-color:var(--teal);}
+  .col-idx{width:34px; color:var(--ink-soft);}
+  .col-actions{width:36px;}
+  .sess-group{ border-inline-end:1px solid rgba(255,255,255,.25); }
+  td.sess-end{ border-inline-end:1px solid #C3CCD6; }
+  th.sess-end{ border-inline-end:1px solid #3a4a68; }
+  .icon-btn{
+    background:none; border:none; color:var(--coral); font-size:1rem; padding:2px 6px; border-radius:4px;
+  }
+  .icon-btn:hover{background:#FBEAE6;}
+
+  /* ---- Modal ---- */
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(21,34,56,.45); display:flex;
+    align-items:center; justify-content:center; z-index:50; padding:16px;
+  }
+  .modal{
+    background:#fff; border-radius:12px; padding:24px; width:100%; max-width:420px;
+    box-shadow:0 12px 40px rgba(0,0,0,.25);
+  }
+  .modal h3{margin-top:0;}
+  .modal-actions{display:flex; justify-content:flex-end; gap:10px; margin-top:18px;}
+
+  .hidden{display:none !important;}
+  .spinner{
+    width:16px; height:16px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff;
+    border-radius:50%; display:inline-block; animation:spin .7s linear infinite; vertical-align:middle; margin-left:6px;
+  }
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .link-btn{background:none;border:none;color:var(--teal);font-weight:600;padding:0;text-decoration:underline;font-size:.85rem;}
+  .footnote{font-size:.75rem; color:var(--ink-soft); margin-top:10px;}
+
+  /* ---- Login screen ---- */
+  .login-wrap{
+    min-height:80vh; display:flex; align-items:center; justify-content:center;
+  }
+  .login-panel{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    box-shadow:var(--shadow); padding:34px 32px; width:100%; max-width:360px;
+  }
+  .login-panel h2{margin-top:0; margin-bottom:4px;}
+  .login-panel .sub{color:var(--ink-soft); font-size:.85rem; margin-bottom:20px;}
+  .login-panel button{width:100%; margin-top:6px;}
+  .user-chip{
+    display:flex; align-items:center; gap:10px; font-size:.82rem; color:var(--ink-soft);
+  }
+
+  /* ---- Mobile / small screens ---- */
+  @media (max-width: 720px){
+    #app{padding:16px 12px 40px;}
+    .top-bar{flex-direction:column; align-items:flex-start; gap:10px; padding-bottom:10px; margin-bottom:18px;}
+    .top-bar h1{font-size:1.2rem;}
+    #topBarActions{width:100%;}
+    #topBarActions > div{width:100%; justify-content:space-between; flex-wrap:wrap;}
+    .panel{padding:16px;}
+    .row-2, .row-3{grid-template-columns:1fr;}
+    .session-row{grid-template-columns:22px 1fr; grid-template-areas:"idx date" "start end"; row-gap:8px;}
+    .session-row > *:nth-child(1){grid-area:idx;}
+    .session-row > *:nth-child(2){grid-area:date;}
+    .session-row > *:nth-child(3){grid-area:start;}
+    .session-row > *:nth-child(4){grid-area:end;}
+    .course-grid{grid-template-columns:1fr;}
+    .detail-header{flex-direction:column; align-items:stretch;}
+    .detail-actions{width:100%;}
+    .detail-actions button{flex:1;}
+    .att-box{width:26px; height:26px;}
+    thead th{font-size:.75rem; padding:7px 5px;}
+    table{font-size:.78rem;}
+    .modal{padding:18px; max-width:100%;}
+    .login-panel{padding:26px 22px; max-width:100%;}
+    .login-wrap{min-height:70vh;}
+  }
+  @media (max-width: 480px){
+    .top-bar h1{font-size:1.05rem;}
+    .top-bar .sub{font-size:.75rem;}
+    button{padding:8px 12px; font-size:.85rem;}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="top-bar">
+    <div class="brand">
+      <h1>ניהול נוכחות בקורסים</h1>
+      <div class="sub">יצירת קורסים, מעקב נוכחות, הערות וחוות דעת</div>
+    </div>
+    <div id="topBarActions"></div>
+  </div>
+
+  <div id="bannerHost"></div>
+  <div id="viewHost"></div>
+</div>
+
+<script>
+/* =========================================================
+   Firebase setup — "korsim" project: main app data
+   (courses, participants, authentication)
+   ========================================================= */
+const korsimConfig = {
+  apiKey: "AIzaSyDLenhRyqvvM_lg2S2dt2_fgSIgTdilhpI",
+  authDomain: "korsim.firebaseapp.com",
+  projectId: "korsim",
+  storageBucket: "korsim.firebasestorage.app",
+  messagingSenderId: "51951601736",
+  appId: "1:51951601736:web:d08bcf21c7a82c4cf2b07d"
+};
+
+const korsimApp = firebase.initializeApp(korsimConfig, "korsimApp");
+const dbKorsim = korsimApp.firestore();
+const korsimAuth = korsimApp.auth();
+
+/* =========================================================
+   Branch list — hardcoded from the provided branch file
+   (not pulled from an external DB). To add/remove/rename a
+   branch, edit this array directly.
+   ========================================================= */
+const BRANCHES = [
+  { id: "branch-508", code: 508, name: "חיפה מוריה" },
+  { id: "branch-548", code: 548, name: "חיפה נווה שאנן" },
+  { id: "branch-565", code: 565, name: "חיפה מרכז כרמל" },
+  { id: "branch-568", code: 568, name: "חיפה אינשטיין" },
+  { id: "branch-556", code: 556, name: "יגאל אלון" },
+  { id: "branch-500", code: 500, name: "רמת אביב" },
+  { id: "branch-561", code: 561, name: "חולון פארק פרס כשר" },
+  { id: "branch-563", code: 563, name: "יבנה" },
+  { id: "branch-528", code: 528, name: "מודיעין מליבו" },
+  { id: "branch-530", code: 530, name: "ראשון לציון מערב" },
+  { id: "branch-538", code: 538, name: "ראשון לציון מרכז" },
+  { id: "branch-543", code: 543, name: "מודיעין קייזר" },
+  { id: "branch-569", code: 569, name: "ראשון לציון מזרח" },
+  { id: "branch-504", code: 504, name: "רמת השרון" },
+  { id: "branch-542", code: 542, name: "ראש העין" },
+  { id: "branch-550", code: 550, name: "הרצליה מרכז" },
+  { id: "branch-570", code: 570, name: "הרצליה פיתוח" },
+  { id: "branch-510", code: 510, name: "חולון סטרומה" },
+  { id: "branch-552", code: 552, name: "בת ים" },
+  { id: "branch-511", code: 511, name: "תלפיות" },
+  { id: "branch-515", code: 515, name: "הגבעה הצרפתית" },
+  { id: "branch-536", code: 536, name: "נצרת עילית" },
+  { id: "branch-545", code: 545, name: "חדרה" },
+  { id: "branch-509", code: 509, name: "קרליבך" },
+  { id: "branch-539", code: 539, name: "אשדוד סיטי" },
+  { id: "branch-554", code: 554, name: "ירקון נמל כשר" },
+  { id: "branch-564", code: 564, name: "פלורנטין" },
+  { id: "branch-566", code: 566, name: "אשדוד כשר" },
+  { id: "branch-505", code: 505, name: "כפר סבא ויצמן" },
+  { id: "branch-547", code: 547, name: "רמת החייל" },
+  { id: "branch-549", code: 549, name: "זכרון יעקב" },
+  { id: "branch-560", code: 560, name: "כפר סבא הירוקה" },
+  { id: "branch-574", code: 574, name: "פרדס חנה" },
+  { id: "branch-501", code: 501, name: "אבן גבירול" },
+  { id: "branch-514", code: 514, name: "רעננה" },
+  { id: "branch-519", code: 519, name: "גבעתיים אלוף שדה" },
+  { id: "branch-520", code: 520, name: "יהוד" },
+  { id: "branch-537", code: 537, name: "גני תקווה/ קריית אונו" },
+  { id: "branch-622", code: 622, name: "אילת" },
+  { id: "branch-646", code: 646, name: "אשקלון" },
+  { id: "branch-676", code: 676, name: "אשקלון כשר" },
+  { id: "branch-616", code: 616, name: "באר שבע מרכז" },
+  { id: "branch-657", code: 657, name: "באר שבע רמות" },
+  { id: "branch-671", code: 671, name: "בורוכוב" },
+  { id: "branch-631", code: 631, name: "הוד השרון" },
+  { id: "branch-653", code: 653, name: "קדימה" },
+  { id: "branch-607", code: 607, name: "נתניה מרכז" },
+  { id: "branch-640", code: 640, name: "נתניה פולג" },
+  { id: "branch-655", code: 655, name: "פתח תקוה כפר גנים" },
+  { id: "branch-672", code: 672, name: "פתח תקוה אם המושבות" },
+  { id: "branch-606", code: 606, name: "פתח תקוה שטמפפר" },
+  { id: "branch-621", code: 621, name: "קריות מרכז" },
+  { id: "branch-662", code: 662, name: "קריון צפון - קריון" },
+  { id: "branch-675", code: 675, name: "קריות כשר" },
+  { id: "branch-651", code: 651, name: "נהריה" },
+  { id: "branch-641", code: 641, name: "רהט" },
+  { id: "branch-618", code: 618, name: "רחובות" },
+  { id: "branch-667", code: 667, name: "רחובות אזורים" },
+  { id: "branch-680", code: 680, name: "נס ציונה" },
+  { id: "branch-644", code: 644, name: "רמלה" },
+  { id: "branch-658", code: 658, name: "רמת ישי" },
+  { id: "branch-673", code: 673, name: "עפולה" },
+  { id: "branch-678", code: 678, name: "כרמיאל" },
+  { id: "branch-677", code: 677, name: "יקנעם" },
+  { id: "branch-682", code: 682, name: "טייבה" },
+];
+
+
+
+/* =========================================================
+   State
+   ========================================================= */
+const state = {
+  view: "list",          // list | create | detail
+  courses: [],
+  branches: [],          // {id, name}
+  branchesLoaded: false,
+  currentCourseId: null,
+  currentCourse: null,
+  participants: [],
+  unsubscribeParticipants: null,
+  unsubscribeCourses: null,
+  showAddParticipant: false,
+  newSessionsCount: 4,
+  user: null,
+  authChecked: false,
+  loginError: "",
+  loginLoading: false,
+};
+
+/* =========================================================
+   Helpers
+   ========================================================= */
+function el(tag, attrs, children){
+  const node = document.createElement(tag);
+  attrs = attrs || {};
+  for(const k in attrs){
+    const v = attrs[k];
+    if(v === undefined || v === false) continue;
+    if(k === "class") node.className = v;
+    else if(k === "html") node.innerHTML = v;
+    else if(k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+    else node.setAttribute(k, v === true ? "" : v);
+  }
+  (children||[]).forEach(c => {
+    if(c === null || c === undefined) return;
+    if(typeof c === "string") node.appendChild(document.createTextNode(c));
+    else node.appendChild(c);
+  });
+  return node;
+}
+
+function showBanner(message, type){
+  const host = document.getElementById("bannerHost");
+  host.innerHTML = "";
+  if(!message) return;
+  host.appendChild(el("div", {class:"banner " + (type||"info")}, [message]));
+}
+
+function clearBanner(){ document.getElementById("bannerHost").innerHTML = ""; }
+
+function formatDate(d){
+  if(!d) return "";
+  try{
+    const parts = d.split("-");
+    if(parts.length===3) return parts[2]+"/"+parts[1]+"/"+parts[0];
+  }catch(e){}
+  return d;
+}
+
+/* =========================================================
+   Branches: loaded from the local BRANCHES constant above
+   (no external database call needed).
+   ========================================================= */
+async function loadBranches(){
+  state.branches = BRANCHES.slice().sort((a,b)=> (a.code||0) - (b.code||0));
+  state.branchesLoaded = true;
+}
+
+/* =========================================================
+   Firestore: courses (korsim project)
+   ========================================================= */
+function subscribeCourses(){
+  if(state.unsubscribeCourses) state.unsubscribeCourses();
+  state.unsubscribeCourses = dbKorsim.collection("courses")
+    .orderBy("createdAt", "desc")
+    .onSnapshot(snap=>{
+      state.courses = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      clearBanner();
+      render();
+    }, err=>{
+      console.error(err);
+      showBanner("שגיאה בטעינת רשימת הקורסים מה-Database: " + err.message + ". ייתכן שיש להתאים את חוקי האבטחה (Firestore Rules) של פרויקט korsim.", "error");
+    });
+}
+
+async function createCourse(name, sessions){
+  await dbKorsim.collection("courses").add({
+    name: name,
+    sessions: sessions,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+async function deleteCourse(courseId){
+  // delete participants subcollection first
+  const partsSnap = await dbKorsim.collection("courses").doc(courseId).collection("participants").get();
+  const batch = dbKorsim.batch();
+  partsSnap.forEach(d=> batch.delete(d.ref));
+  batch.delete(dbKorsim.collection("courses").doc(courseId));
+  await batch.commit();
+}
+
+/* =========================================================
+   Firestore: participants (subcollection of a course)
+   ========================================================= */
+function subscribeParticipants(courseId){
+  if(state.unsubscribeParticipants) state.unsubscribeParticipants();
+  state.unsubscribeParticipants = dbKorsim.collection("courses").doc(courseId).collection("participants")
+    .orderBy("lastName")
+    .onSnapshot(snap=>{
+      state.participants = snap.docs.map(d=>({id:d.id, ...d.data()}));
+      clearBanner();
+      render();
+    }, err=>{
+      console.error(err);
+      showBanner("שגיאה בטעינת המשתתפים: " + err.message, "error");
+    });
+}
+
+async function addParticipant(courseId, data){
+  const attendance = {};
+  const course = state.courses.find(c=>c.id===courseId);
+  const sessionCount = course && course.sessions ? course.sessions.length : 0;
+  for(let i=0;i<sessionCount;i++){ attendance[i] = {start:false, end:false}; }
+  await dbKorsim.collection("courses").doc(courseId).collection("participants").add({
+    firstName: data.firstName,
+    lastName: data.lastName,
+    teudatZehut: data.teudatZehut,
+    branchId: data.branchId || "",
+    branchName: data.branchName || "",
+    notes: "",
+    feedback: "",
+    attendance: attendance,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+}
+
+async function deleteParticipant(courseId, participantId){
+  await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).delete();
+}
+
+async function updateParticipantField(courseId, participantId, field, value){
+  const update = {};
+  update[field] = value;
+  await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).update(update);
+}
+
+async function toggleAttendance(courseId, participantId, sessionIdx, which, currentVal){
+  const path = "attendance." + sessionIdx + "." + which;
+  const update = {};
+  update[path] = !currentVal;
+  await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).update(update);
+}
+
+/* =========================================================
+   Excel export
+   ========================================================= */
+async function exportToExcel(){
+  const course = state.currentCourse;
+  if(!course) return;
+  const sessions = course.sessions || [];
+
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet("נוכחות", { views: [{ rightToLeft: true }] });
+
+  const header = ["שם פרטי","שם משפחה","ת.ז","סניף"];
+  sessions.forEach((s,i)=>{
+    const label = (s.date ? formatDate(s.date) : ("מפגש "+(i+1)));
+    header.push(label + " - התחלה");
+    header.push(label + " - סיום");
+  });
+  header.push("הערות", "חוות דעת", "אחוז נוכחות");
+
+  const headerRow = sheet.addRow(header);
+  headerRow.eachCell(cell=>{
+    cell.font = { bold:true, color:{argb:"FFFFFFFF"} };
+    cell.fill = { type:"pattern", pattern:"solid", fgColor:{argb:"FF14213D"} };
+    cell.alignment = { horizontal:"center", vertical:"middle", wrapText:true };
+  });
+
+  const fixedColsCount = 4; // first name, last name, id, branch
+
+  state.participants.forEach(p=>{
+    const row = [p.firstName||"", p.lastName||"", p.teudatZehut||"", p.branchName||""];
+    let attendedSessions = 0;
+    sessions.forEach((s,i)=>{
+      const att = (p.attendance && p.attendance[i]) || {};
+      if(att.start || att.end) attendedSessions++;
+      row.push(att.start ? "נכח" : "לא נכח");
+      row.push(att.end ? "נכח" : "לא נכח");
+    });
+    row.push(p.notes||"", p.feedback||"");
+    const pct = sessions.length ? (attendedSessions / sessions.length) : 0;
+    row.push(pct);
+
+    const addedRow = sheet.addRow(row);
+
+    // color absent cells red
+    let colIndex = fixedColsCount;
+    sessions.forEach((s,i)=>{
+      const att = (p.attendance && p.attendance[i]) || {};
+      ["start","end"].forEach(which=>{
+        colIndex++;
+        const cell = addedRow.getCell(colIndex);
+        cell.alignment = { horizontal:"center" };
+        if(!att[which]){
+          cell.font = { color: { argb: "FFCC0000" } };
+        }
+      });
+    });
+
+    // percentage column: last column, formatted as a real Excel percentage
+    const pctCell = addedRow.getCell(header.length);
+    pctCell.numFmt = "0%";
+    pctCell.alignment = { horizontal:"center" };
+  });
+
+  sheet.columns.forEach((col, i)=>{
+    col.width = (i < fixedColsCount) ? 16 : 14;
+  });
+  sheet.getColumn(header.length - 2).width = 24; // הערות
+  sheet.getColumn(header.length - 1).width = 24; // חוות דעת
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const safeName = (course.name || "קורס").replace(/[\\/:*?"<>|]/g,"_");
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "דוח_נוכחות_" + safeName + ".xlsx";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* =========================================================
+   Views
+   ========================================================= */
+function goList(){
+  state.view = "list";
+  state.currentCourseId = null;
+  state.currentCourse = null;
+  if(state.unsubscribeParticipants){ state.unsubscribeParticipants(); state.unsubscribeParticipants = null; }
+  render();
+}
+
+function goCreate(){
+  state.view = "create";
+  state.newSessionsCount = 4;
+  render();
+}
+
+function goDetail(courseId){
+  state.view = "detail";
+  state.currentCourseId = courseId;
+  state.currentCourse = state.courses.find(c=>c.id===courseId) || null;
+  subscribeParticipants(courseId);
+  render();
+}
+
+function renderTopBarActions(){
+  const host = document.getElementById("topBarActions");
+  host.innerHTML = "";
+  const wrap = el("div",{style:"display:flex; align-items:center; gap:14px;"});
+  if(state.view === "list"){
+    wrap.appendChild(el("button",{class:"btn-primary", onclick: goCreate},["+ קורס חדש"]));
+  } else {
+    wrap.appendChild(el("button",{class:"btn-ghost", onclick: goList},["← חזרה לרשימת קורסים"]));
+  }
+  if(state.user){
+    wrap.appendChild(el("div",{class:"user-chip"},[
+      state.user.email || "מחובר",
+      el("button",{class:"btn-ghost btn-small", onclick: ()=>{ korsimAuth.signOut(); }},["התנתק"])
+    ]));
+  }
+  host.appendChild(wrap);
+}
+
+function renderLogin(){
+  const host = document.getElementById("viewHost");
+  document.getElementById("topBarActions").innerHTML = "";
+  host.innerHTML = "";
+
+  const wrap = el("div",{class:"login-wrap"});
+  const panel = el("div",{class:"login-panel"});
+  panel.appendChild(el("h2",{},["התחברות"]));
+  panel.appendChild(el("div",{class:"sub"},["יש להתחבר עם חשבון שהוגדר עבור מערכת ניהול הנוכחות."]));
+
+  panel.appendChild(el("div",{class:"field"},[
+    el("label",{},["אימייל"]),
+    el("input",{type:"email", id:"login_email", autocomplete:"username"})
+  ]));
+  panel.appendChild(el("div",{class:"field"},[
+    el("label",{},["סיסמה"]),
+    el("input",{type:"password", id:"login_password", autocomplete:"current-password"})
+  ]));
+
+  if(state.loginError){
+    panel.appendChild(el("div",{class:"banner error", style:"margin-bottom:14px;"},[state.loginError]));
+  }
+
+  const submit = async ()=>{
+    const email = document.getElementById("login_email").value.trim();
+    const password = document.getElementById("login_password").value;
+    if(!email || !password){
+      state.loginError = "יש להזין אימייל וסיסמה.";
+      render();
+      return;
+    }
+    state.loginLoading = true;
+    state.loginError = "";
+    render();
+    try{
+      await korsimAuth.signInWithEmailAndPassword(email, password);
+      // onAuthStateChanged will handle re-render
+    }catch(e){
+      state.loginLoading = false;
+      state.loginError = "התחברות נכשלה: " + translateAuthError(e);
+      render();
+    }
+  };
+
+  const loginBtn = el("button",{class:"btn-primary", onclick: submit, disabled: state.loginLoading || undefined},
+    [state.loginLoading ? "מתחבר... " : "התחבר", state.loginLoading ? el("span",{class:"spinner"}) : null]);
+  panel.appendChild(loginBtn);
+
+  panel.querySelectorAll("input").forEach(inp=>{
+    inp.addEventListener("keydown", (e)=>{ if(e.key==="Enter") submit(); });
+  });
+
+  wrap.appendChild(panel);
+  host.appendChild(wrap);
+}
+
+function translateAuthError(e){
+  const code = e && e.code || "";
+  const map = {
+    "auth/invalid-email": "כתובת אימייל לא תקינה.",
+    "auth/user-not-found": "לא נמצא משתמש עם אימייל זה.",
+    "auth/wrong-password": "סיסמה שגויה.",
+    "auth/invalid-credential": "אימייל או סיסמה שגויים.",
+    "auth/too-many-requests": "יותר מדי ניסיונות. נסה שוב מאוחר יותר.",
+    "auth/user-disabled": "המשתמש הזה הושבת."
+  };
+  return map[code] || (e && e.message) || "שגיאה לא ידועה.";
+}
+
+function renderList(){
+  const host = document.getElementById("viewHost");
+  host.innerHTML = "";
+
+  if(!state.courses.length){
+    host.appendChild(el("div",{class:"empty-state"},[
+      el("p",{},["עדיין אין קורסים במערכת."]),
+      el("button",{class:"btn-primary", onclick: goCreate},["צור קורס ראשון"])
+    ]));
+    return;
+  }
+
+  const grid = el("div",{class:"course-grid"});
+  state.courses.forEach(c=>{
+    const sessCount = (c.sessions||[]).length;
+    const firstDate = sessCount ? formatDate(c.sessions[0].date) : "";
+    const card = el("div",{class:"course-card", onclick: ()=>goDetail(c.id)},[
+      el("h3",{},[c.name || "(ללא שם)"]),
+      el("div",{class:"meta"},[sessCount + " מפגשים" + (firstDate ? " · מתחיל " + firstDate : "")]),
+      el("div",{style:"display:flex;justify-content:flex-end;margin-top:8px;"},[
+        el("button",{class:"btn-danger btn-small", onclick:(e)=>{
+          e.stopPropagation();
+          if(confirm("למחוק את הקורס '"+(c.name||"")+"'? פעולה זו תמחק גם את כל המשתתפים שלו.")){
+            deleteCourse(c.id).catch(err=>showBanner("שגיאה במחיקה: "+err.message,"error"));
+          }
+        }},["מחק"])
+      ])
+    ]);
+    grid.appendChild(card);
+  });
+  host.appendChild(grid);
+}
+
+function renderCreate(){
+  const host = document.getElementById("viewHost");
+  host.innerHTML = "";
+
+  const panel = el("div",{class:"panel"});
+  panel.appendChild(el("h2",{style:"margin-top:0;"},["יצירת קורס חדש"]));
+
+  const nameField = el("div",{class:"field"},[
+    el("label",{},["שם הקורס"]),
+    el("input",{type:"text", id:"newCourseName", placeholder:"לדוגמה: קורס הדרכת מדריכים - מחזור ג׳"})
+  ]);
+  panel.appendChild(nameField);
+
+  const countField = el("div",{class:"field", style:"max-width:220px;"},[
+    el("label",{},["מספר מפגשים"]),
+    el("input",{type:"number", id:"sessionCountInput", min:"1", max:"40", value:String(state.newSessionsCount)})
+  ]);
+  panel.appendChild(countField);
+
+  panel.appendChild(el("button",{class:"btn-ghost", style:"margin-bottom:18px;", onclick:()=>{
+    const val = parseInt(document.getElementById("sessionCountInput").value, 10);
+    state.newSessionsCount = (val>0 && val<=60) ? val : state.newSessionsCount;
+    renderSessionRows();
+  }},["בנה טבלת מפגשים"]));
+
+  const sessionsList = el("div",{class:"sessions-list", id:"sessionsList"});
+  panel.appendChild(sessionsList);
+
+  function renderSessionRows(){
+    sessionsList.innerHTML = "";
+    sessionsList.appendChild(el("div",{class:"session-row", style:"background:transparent;border:none;padding:0 10px;"},[
+      el("div",{},[""]),
+      el("div",{style:"font-size:.78rem;font-weight:700;color:var(--ink-soft);"},["תאריך"]),
+      el("div",{style:"font-size:.78rem;font-weight:700;color:var(--ink-soft);"},["שעת התחלה"]),
+      el("div",{style:"font-size:.78rem;font-weight:700;color:var(--ink-soft);"},["שעת סיום"]),
+    ]));
+    for(let i=0;i<state.newSessionsCount;i++){
+      sessionsList.appendChild(el("div",{class:"session-row"},[
+        el("div",{class:"idx"},[String(i+1)]),
+        el("input",{type:"date", id:"sess_date_"+i}),
+        el("input",{type:"time", id:"sess_start_"+i, value:"18:00"}),
+        el("input",{type:"time", id:"sess_end_"+i, value:"20:00"}),
+      ]));
+    }
+  }
+  renderSessionRows();
+
+  const actions = el("div",{class:"form-actions"});
+  const saveBtn = el("button",{class:"btn-primary", onclick: async ()=>{
+    const name = document.getElementById("newCourseName").value.trim();
+    if(!name){ showBanner("יש להזין שם לקורס.", "error"); return; }
+    const sessions = [];
+    for(let i=0;i<state.newSessionsCount;i++){
+      sessions.push({
+        date: document.getElementById("sess_date_"+i).value,
+        start: document.getElementById("sess_start_"+i).value,
+        end: document.getElementById("sess_end_"+i).value,
+      });
+    }
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = "שומר... <span class='spinner'></span>";
+    try{
+      await createCourse(name, sessions);
+      clearBanner();
+      goList();
+    }catch(e){
+      showBanner("שגיאה ביצירת הקורס: "+e.message, "error");
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = "שמור קורס";
+    }
+  }},["שמור קורס"]);
+  actions.appendChild(saveBtn);
+  actions.appendChild(el("button",{class:"btn-ghost", onclick: goList},["ביטול"]));
+  panel.appendChild(actions);
+
+  host.appendChild(panel);
+}
+
+function renderAddParticipantModal(){
+  if(!state.showAddParticipant) return;
+  const overlay = el("div",{class:"modal-overlay", onclick:(e)=>{ if(e.target===overlay){ state.showAddParticipant=false; render(); } }});
+  const modal = el("div",{class:"modal"});
+  modal.appendChild(el("h3",{},["הוספת משתתף"]));
+
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["שם פרטי"]), el("input",{type:"text", id:"p_first"})]));
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["שם משפחה"]), el("input",{type:"text", id:"p_last"})]));
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["ת.ז"]), el("input",{type:"text", id:"p_id", maxlength:"9"})]));
+
+  const branchField = el("div",{class:"field"});
+  branchField.appendChild(el("label",{},["סניף"]));
+  if(state.branches.length){
+    const select = el("select",{id:"p_branch"});
+    select.appendChild(el("option",{value:""},["בחר סניף..."]));
+    state.branches.forEach(b=>{
+      const label = (b.code ? (b.code + " - ") : "") + b.name;
+      select.appendChild(el("option",{value:b.id, "data-name":label},[label]));
+    });
+    branchField.appendChild(select);
+  } else {
+    branchField.appendChild(el("input",{type:"text", id:"p_branch_text", placeholder:"שם הסניף"}));
+    branchField.appendChild(el("div",{class:"footnote"},["לא הוגדרה רשימת סניפים בקוד — ניתן להזין ידנית."]));
+  }
+  modal.appendChild(branchField);
+
+  const actions = el("div",{class:"modal-actions"});
+  const saveBtn = el("button",{class:"btn-primary", onclick: async ()=>{
+    const firstName = document.getElementById("p_first").value.trim();
+    const lastName = document.getElementById("p_last").value.trim();
+    const teudatZehut = document.getElementById("p_id").value.trim();
+    if(!firstName || !lastName){ showBanner("יש להזין שם פרטי ושם משפחה.", "error"); return; }
+    let branchId="", branchName="";
+    const selectEl = document.getElementById("p_branch");
+    const textEl = document.getElementById("p_branch_text");
+    if(selectEl){
+      branchId = selectEl.value;
+      branchName = selectEl.selectedOptions[0] ? selectEl.selectedOptions[0].getAttribute("data-name") || "" : "";
+    } else if(textEl){
+      branchName = textEl.value.trim();
+    }
+    saveBtn.disabled = true;
+    try{
+      await addParticipant(state.currentCourseId, {firstName, lastName, teudatZehut, branchId, branchName});
+      state.showAddParticipant = false;
+      clearBanner();
+      render();
+    }catch(e){
+      showBanner("שגיאה בהוספת משתתף: "+e.message, "error");
+      saveBtn.disabled = false;
+    }
+  }},["הוסף"]);
+  actions.appendChild(saveBtn);
+  actions.appendChild(el("button",{class:"btn-ghost", onclick:()=>{ state.showAddParticipant=false; render(); }},["ביטול"]));
+  modal.appendChild(actions);
+
+  overlay.appendChild(modal);
+  document.getElementById("app").appendChild(overlay);
+}
+
+function renderDetail(){
+  const host = document.getElementById("viewHost");
+  host.innerHTML = "";
+  const course = state.currentCourse;
+  if(!course){
+    host.appendChild(el("div",{class:"empty-state"},["הקורס לא נמצא."]));
+    return;
+  }
+  const sessions = course.sessions || [];
+
+  const header = el("div",{class:"detail-header"},[
+    el("div",{},[
+      el("h2",{},[course.name || "(ללא שם)"]),
+      el("div",{class:"meta"},[sessions.length + " מפגשים · " + state.participants.length + " משתתפים"])
+    ]),
+    el("div",{class:"detail-actions"},[
+      el("button",{class:"btn-primary", onclick:()=>{ state.showAddParticipant = true; render(); }},["+ הוסף משתתף"]),
+      el("button",{class:"btn-ghost", onclick: exportToExcel},["ייצוא לאקסל"]),
+    ])
+  ]);
+  host.appendChild(header);
+
+  if(!state.participants.length){
+    host.appendChild(el("div",{class:"empty-state"},["אין עדיין משתתפים בקורס זה. לחצו על \"הוסף משתתף\" כדי להתחיל."]));
+    renderAddParticipantModal();
+    return;
+  }
+
+  const wrap = el("div",{class:"table-wrap"});
+  const table = el("table");
+
+  const sessionHeadRow = el("tr",{class:"session-head"},[
+    el("th",{rowspan:"2"},["#"]),
+    el("th",{rowspan:"2"},["שם פרטי"]),
+    el("th",{rowspan:"2"},["שם משפחה"]),
+    el("th",{rowspan:"2"},["ת.ז"]),
+    el("th",{rowspan:"2"},["סניף"]),
+  ]);
+  sessions.forEach((s,i)=>{
+    const label = s.date ? formatDate(s.date) : ("מפגש "+(i+1));
+    sessionHeadRow.appendChild(el("th",{colspan:"2", class:"sess-group"},[label]));
+  });
+  sessionHeadRow.appendChild(el("th",{rowspan:"2"},["הערות"]));
+  sessionHeadRow.appendChild(el("th",{rowspan:"2"},["חוות דעת"]));
+  sessionHeadRow.appendChild(el("th",{rowspan:"2"},[""]));
+
+  const subHeadRow = el("tr");
+  sessions.forEach(()=>{
+    subHeadRow.appendChild(el("th",{},["התחלה"]));
+    subHeadRow.appendChild(el("th",{class:"sess-end"},["סיום"]));
+  });
+
+  const thead = el("thead",{},[sessionHeadRow, subHeadRow]);
+  table.appendChild(thead);
+
+  const tbody = el("tbody");
+  state.participants.forEach((p, idx)=>{
+    const tr = el("tr");
+    tr.appendChild(el("td",{class:"col-idx"},[String(idx+1)]));
+    tr.appendChild(el("td",{class:"name-cell"},[p.firstName||""]));
+    tr.appendChild(el("td",{class:"name-cell"},[p.lastName||""]));
+    tr.appendChild(el("td",{},[p.teudatZehut||""]));
+    tr.appendChild(el("td",{},[p.branchName||""]));
+
+    sessions.forEach((s,i)=>{
+      const att = (p.attendance && p.attendance[i]) || {start:false,end:false};
+      ["start","end"].forEach(which=>{
+        const on = !!att[which];
+        const box = el("div",{class:"att-box"+(on?" on":"")},[on?"✓":""]);
+        const td = el("td",{class:"att-cell"+(which==="end"?" sess-end":""), title: which==="start"?"נוכחות בתחילת המפגש":"נוכחות בסיום המפגש", onclick: async ()=>{
+          try{
+            await toggleAttendance(state.currentCourseId, p.id, i, which, on);
+          }catch(e){
+            showBanner("שגיאה בעדכון נוכחות: "+e.message,"error");
+          }
+        }},[box]);
+        tr.appendChild(td);
+      });
+    });
+
+    const notesTd = el("td",{});
+    const notesArea = el("textarea",{rows:"1", placeholder:"הערות..."},[]);
+    notesArea.value = p.notes || "";
+    let notesTimer;
+    notesArea.addEventListener("input", ()=>{
+      clearTimeout(notesTimer);
+      notesTimer = setTimeout(()=>{
+        updateParticipantField(state.currentCourseId, p.id, "notes", notesArea.value)
+          .catch(e=>showBanner("שגיאה בשמירת הערה: "+e.message,"error"));
+      }, 600);
+    });
+    notesTd.appendChild(notesArea);
+    tr.appendChild(notesTd);
+
+    const feedbackTd = el("td",{});
+    const feedbackArea = el("textarea",{rows:"1", placeholder:"חוות דעת..."},[]);
+    feedbackArea.value = p.feedback || "";
+    let fbTimer;
+    feedbackArea.addEventListener("input", ()=>{
+      clearTimeout(fbTimer);
+      fbTimer = setTimeout(()=>{
+        updateParticipantField(state.currentCourseId, p.id, "feedback", feedbackArea.value)
+          .catch(e=>showBanner("שגיאה בשמירת חוות דעת: "+e.message,"error"));
+      }, 600);
+    });
+    feedbackTd.appendChild(feedbackArea);
+    tr.appendChild(feedbackTd);
+
+    const actionsTd = el("td",{class:"col-actions"});
+    actionsTd.appendChild(el("button",{class:"icon-btn", title:"מחק משתתף", onclick:()=>{
+      if(confirm("למחוק את "+(p.firstName||"")+" "+(p.lastName||"")+"?")){
+        deleteParticipant(state.currentCourseId, p.id).catch(e=>showBanner("שגיאה במחיקה: "+e.message,"error"));
+      }
+    }},["✕"]));
+    tr.appendChild(actionsTd);
+
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  host.appendChild(wrap);
+
+  renderAddParticipantModal();
+}
+
+function render(){
+  if(!state.authChecked){
+    document.getElementById("topBarActions").innerHTML = "";
+    document.getElementById("viewHost").innerHTML = "";
+    clearBanner();
+    return;
+  }
+  if(!state.user){
+    clearBanner();
+    renderLogin();
+    return;
+  }
+
+  renderTopBarActions();
+  const existingOverlay = document.querySelector(".modal-overlay");
+  if(existingOverlay) existingOverlay.remove();
+
+  if(state.view === "list") renderList();
+  else if(state.view === "create") renderCreate();
+  else if(state.view === "detail") renderDetail();
+}
+
+/* =========================================================
+   Init
+   ========================================================= */
+let dataLoadedForSession = false;
+
+korsimAuth.onAuthStateChanged((user)=>{
+  state.authChecked = true;
+  state.user = user;
+  state.loginLoading = false;
+  state.loginError = "";
+
+  if(user && !dataLoadedForSession){
+    dataLoadedForSession = true;
+    showBanner("טוען נתונים...", "info");
+    loadBranches().then(()=> subscribeCourses());
+  }
+
+  if(!user){
+    dataLoadedForSession = false;
+    if(state.unsubscribeCourses){ state.unsubscribeCourses(); state.unsubscribeCourses = null; }
+    if(state.unsubscribeParticipants){ state.unsubscribeParticipants(); state.unsubscribeParticipants = null; }
+    state.courses = [];
+    state.participants = [];
+    state.view = "list";
+    state.currentCourseId = null;
+    state.currentCourse = null;
+  }
+
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
