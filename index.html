@@ -143,7 +143,7 @@
   .phone-link{color:var(--teal-dark); text-decoration:none;}
   .phone-link:hover{text-decoration:underline;}
   .col-idx{width:34px; color:var(--ink-soft);}
-  .col-actions{width:36px;}
+  .col-actions{width:64px; white-space:nowrap;}
   .sess-group{ border-inline-end:1px solid rgba(255,255,255,.25); }
   td.sess-end{ border-inline-end:1px solid #C3CCD6; }
   th.sess-end{ border-inline-end:1px solid #3a4a68; }
@@ -151,6 +151,8 @@
     background:none; border:none; color:var(--coral); font-size:1rem; padding:2px 6px; border-radius:4px;
   }
   .icon-btn:hover{background:#FBEAE6;}
+  .icon-btn.edit-btn{color:var(--teal-dark);}
+  .icon-btn.edit-btn:hover{background:#EAF3F2;}
 
   /* ---- Modal ---- */
   .modal-overlay{
@@ -341,6 +343,7 @@ const state = {
   unsubscribeParticipants: null,
   unsubscribeCourses: null,
   showAddParticipant: false,
+  editParticipant: null,
   newSessionsCount: 4,
   user: null,
   authChecked: false,
@@ -467,6 +470,17 @@ async function addParticipant(courseId, data){
   });
 }
 
+async function updateParticipantDetails(courseId, participantId, data){
+  await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).update({
+    firstName: data.firstName,
+    lastName: data.lastName,
+    teudatZehut: data.teudatZehut,
+    phone: data.phone || "",
+    branchId: data.branchId || "",
+    branchName: data.branchName || ""
+  });
+}
+
 async function deleteParticipant(courseId, participantId){
   await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).delete();
 }
@@ -496,6 +510,24 @@ async function toggleAttendance(courseId, participantId, sessionIdx, which, curr
 /* =========================================================
    Excel export
    ========================================================= */
+function minutesFromTimeString(t){
+  if(!t || typeof t !== "string") return null;
+  const m = t.match(/^(\d{1,2}):(\d{2})$/);
+  if(!m) return null;
+  return parseInt(m[1],10)*60 + parseInt(m[2],10);
+}
+
+// Hours credited for one session: strictly the actual time recorded.
+// Both start AND end must be marked with real times, otherwise 0.
+function sessionHours(session, att){
+  if(!att.start || !att.end) return 0;
+  const startMin = minutesFromTimeString(att.startTime);
+  const endMin   = minutesFromTimeString(att.endTime);
+  if(startMin === null || endMin === null) return 0;
+  if(endMin <= startMin) return 0;
+  return (endMin - startMin) / 60;
+}
+
 async function exportToExcel(){
   const course = state.currentCourse;
   if(!course) return;
@@ -508,9 +540,11 @@ async function exportToExcel(){
   sessions.forEach((s,i)=>{
     const label = (s.date ? formatDate(s.date) : ("מפגש "+(i+1)));
     header.push(label + " - התחלה");
+    header.push(label + " - שעת התחלה");
     header.push(label + " - סיום");
+    header.push(label + " - שעת סיום");
   });
-  header.push("הערות", "חוות דעת", "אחוז נוכחות");
+  header.push("הערות", "חוות דעת", "אחוז נוכחות", "סה\"כ שעות נוכחות");
 
   const headerRow = sheet.addRow(header);
   headerRow.eachCell(cell=>{
@@ -523,32 +557,42 @@ async function exportToExcel(){
 
   state.participants.forEach(p=>{
     const row = [p.firstName||"", p.lastName||"", p.teudatZehut||"", p.phone||"", p.branchName||""];
-    let attendedSessions = 0;
+    let completeSessions = 0;
+    let totalHours = 0;
+
     sessions.forEach((s,i)=>{
       const att = (p.attendance && p.attendance[i]) || {};
-      if(att.start || att.end) attendedSessions++;
+      // a session counts only when it is complete: both start and end marked
+      if(att.start && att.end) completeSessions++;
+      totalHours += sessionHours(s, att);
       ["start","end"].forEach(which=>{
-        const markedAt = att[which+"Time"] || "";
-        row.push(att[which] ? ("נכח" + (markedAt ? " " + markedAt : "")) : "לא נכח");
+        row.push(att[which] ? "נכח" : "לא נכח");
+        row.push(att[which] ? (att[which+"Time"] || "") : "");
       });
     });
+
     row.push(p.notes||"", p.feedback||"");
-    const pct = sessions.length ? (attendedSessions / sessions.length) : 0;
+    const pct = sessions.length ? (completeSessions / sessions.length) : 0;
     row.push(pct);
+    row.push(Math.round(totalHours * 100) / 100);
 
     const addedRow = sheet.addRow(row);
 
-    // color absent cells red
+    // color absent cells red; time cells stay neutral
     let colIndex = fixedColsCount;
     sessions.forEach((s,i)=>{
       const att = (p.attendance && p.attendance[i]) || {};
       ["start","end"].forEach(which=>{
         colIndex++;
-        const cell = addedRow.getCell(colIndex);
-        cell.alignment = { horizontal:"center" };
+        const statusCell = addedRow.getCell(colIndex);
+        statusCell.alignment = { horizontal:"center" };
         if(!att[which]){
-          cell.font = { color: { argb: "FFCC0000" } };
+          statusCell.font = { color: { argb: "FFCC0000" } };
         }
+        colIndex++;
+        const timeCell = addedRow.getCell(colIndex);
+        timeCell.alignment = { horizontal:"center" };
+        timeCell.numFmt = "@";
       });
     });
 
@@ -557,17 +601,24 @@ async function exportToExcel(){
     phoneCell.numFmt = "@";
     phoneCell.alignment = { horizontal:"center" };
 
-    // percentage column: last column, formatted as a real Excel percentage
-    const pctCell = addedRow.getCell(header.length);
+    // attendance percentage
+    const pctCell = addedRow.getCell(header.length - 1);
     pctCell.numFmt = "0%";
     pctCell.alignment = { horizontal:"center" };
+
+    // total hours
+    const hoursCell = addedRow.getCell(header.length);
+    hoursCell.numFmt = "0.00";
+    hoursCell.alignment = { horizontal:"center" };
+    hoursCell.font = { bold:true };
   });
 
   sheet.columns.forEach((col, i)=>{
-    col.width = (i < fixedColsCount) ? 16 : 16;
+    col.width = (i < fixedColsCount) ? 16 : 15;
   });
-  sheet.getColumn(header.length - 2).width = 24; // הערות
-  sheet.getColumn(header.length - 1).width = 24; // חוות דעת
+  sheet.getColumn(header.length - 3).width = 24; // הערות
+  sheet.getColumn(header.length - 2).width = 24; // חוות דעת
+  sheet.getColumn(header.length).width = 18;     // סה"כ שעות נוכחות
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
@@ -805,16 +856,36 @@ function renderCreate(){
   host.appendChild(panel);
 }
 
-function renderAddParticipantModal(){
-  if(!state.showAddParticipant) return;
-  const overlay = el("div",{class:"modal-overlay", onclick:(e)=>{ if(e.target===overlay){ state.showAddParticipant=false; render(); } }});
-  const modal = el("div",{class:"modal"});
-  modal.appendChild(el("h3",{},["הוספת משתתף"]));
+function renderParticipantModal(){
+  const editing = state.editParticipant;          // participant object, or null when adding
+  if(!state.showAddParticipant && !editing) return;
 
-  modal.appendChild(el("div",{class:"field"},[el("label",{},["שם פרטי"]), el("input",{type:"text", id:"p_first"})]));
-  modal.appendChild(el("div",{class:"field"},[el("label",{},["שם משפחה"]), el("input",{type:"text", id:"p_last"})]));
-  modal.appendChild(el("div",{class:"field"},[el("label",{},["ת.ז"]), el("input",{type:"text", id:"p_id", maxlength:"9"})]));
-  modal.appendChild(el("div",{class:"field"},[el("label",{},["מספר טלפון"]), el("input",{type:"tel", id:"p_phone", inputmode:"tel", placeholder:"050-0000000"})]));
+  const closeModal = ()=>{
+    state.showAddParticipant = false;
+    state.editParticipant = null;
+    render();
+  };
+
+  const overlay = el("div",{class:"modal-overlay", onclick:(e)=>{ if(e.target===overlay) closeModal(); }});
+  const modal = el("div",{class:"modal"});
+  modal.appendChild(el("h3",{},[editing ? "עריכת משתתף" : "הוספת משתתף"]));
+
+  const firstInput  = el("input",{type:"text", id:"p_first"});
+  const lastInput   = el("input",{type:"text", id:"p_last"});
+  const idInput     = el("input",{type:"text", id:"p_id", maxlength:"9"});
+  const phoneInput  = el("input",{type:"tel", id:"p_phone", inputmode:"tel", placeholder:"050-0000000"});
+
+  if(editing){
+    firstInput.value = editing.firstName || "";
+    lastInput.value  = editing.lastName || "";
+    idInput.value    = editing.teudatZehut || "";
+    phoneInput.value = editing.phone || "";
+  }
+
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["שם פרטי"]), firstInput]));
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["שם משפחה"]), lastInput]));
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["ת.ז"]), idInput]));
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["מספר טלפון"]), phoneInput]));
 
   const branchField = el("div",{class:"field"});
   branchField.appendChild(el("label",{},["סניף"]));
@@ -825,19 +896,29 @@ function renderAddParticipantModal(){
       const label = (b.code ? (b.code + " - ") : "") + b.name;
       select.appendChild(el("option",{value:b.id, "data-name":label},[label]));
     });
+    if(editing){
+      // prefer matching by stored id, fall back to the stored display name
+      if(editing.branchId) select.value = editing.branchId;
+      if(!select.value && editing.branchName){
+        const match = Array.from(select.options).find(o=> o.getAttribute("data-name") === editing.branchName);
+        if(match) select.value = match.value;
+      }
+    }
     branchField.appendChild(select);
   } else {
-    branchField.appendChild(el("input",{type:"text", id:"p_branch_text", placeholder:"שם הסניף"}));
+    const branchText = el("input",{type:"text", id:"p_branch_text", placeholder:"שם הסניף"});
+    if(editing) branchText.value = editing.branchName || "";
+    branchField.appendChild(branchText);
     branchField.appendChild(el("div",{class:"footnote"},["לא הוגדרה רשימת סניפים בקוד — ניתן להזין ידנית."]));
   }
   modal.appendChild(branchField);
 
   const actions = el("div",{class:"modal-actions"});
   const saveBtn = el("button",{class:"btn-primary", onclick: async ()=>{
-    const firstName = document.getElementById("p_first").value.trim();
-    const lastName = document.getElementById("p_last").value.trim();
-    const teudatZehut = document.getElementById("p_id").value.trim();
-    const phone = document.getElementById("p_phone").value.trim();
+    const firstName = firstInput.value.trim();
+    const lastName = lastInput.value.trim();
+    const teudatZehut = idInput.value.trim();
+    const phone = phoneInput.value.trim();
     if(!firstName || !lastName){ showBanner("יש להזין שם פרטי ושם משפחה.", "error"); return; }
     let branchId="", branchName="";
     const selectEl = document.getElementById("p_branch");
@@ -850,17 +931,20 @@ function renderAddParticipantModal(){
     }
     saveBtn.disabled = true;
     try{
-      await addParticipant(state.currentCourseId, {firstName, lastName, teudatZehut, phone, branchId, branchName});
-      state.showAddParticipant = false;
+      if(editing){
+        await updateParticipantDetails(state.currentCourseId, editing.id, {firstName, lastName, teudatZehut, phone, branchId, branchName});
+      } else {
+        await addParticipant(state.currentCourseId, {firstName, lastName, teudatZehut, phone, branchId, branchName});
+      }
       clearBanner();
-      render();
+      closeModal();
     }catch(e){
-      showBanner("שגיאה בהוספת משתתף: "+e.message, "error");
+      showBanner((editing ? "שגיאה בעדכון משתתף: " : "שגיאה בהוספת משתתף: ") + e.message, "error");
       saveBtn.disabled = false;
     }
-  }},["הוסף"]);
+  }},[editing ? "שמור שינויים" : "הוסף"]);
   actions.appendChild(saveBtn);
-  actions.appendChild(el("button",{class:"btn-ghost", onclick:()=>{ state.showAddParticipant=false; render(); }},["ביטול"]));
+  actions.appendChild(el("button",{class:"btn-ghost", onclick: closeModal},["ביטול"]));
   modal.appendChild(actions);
 
   overlay.appendChild(modal);
@@ -891,7 +975,7 @@ function renderDetail(){
 
   if(!state.participants.length){
     host.appendChild(el("div",{class:"empty-state"},["אין עדיין משתתפים בקורס זה. לחצו על \"הוסף משתתף\" כדי להתחיל."]));
-    renderAddParticipantModal();
+    renderParticipantModal();
     return;
   }
 
@@ -987,6 +1071,10 @@ function renderDetail(){
     tr.appendChild(feedbackTd);
 
     const actionsTd = el("td",{class:"col-actions"});
+    actionsTd.appendChild(el("button",{class:"icon-btn edit-btn", title:"ערוך משתתף", onclick:()=>{
+      state.editParticipant = p;
+      render();
+    }},["✎"]));
     actionsTd.appendChild(el("button",{class:"icon-btn", title:"מחק משתתף", onclick:()=>{
       if(confirm("למחוק את "+(p.firstName||"")+" "+(p.lastName||"")+"?")){
         deleteParticipant(state.currentCourseId, p.id).catch(e=>showBanner("שגיאה במחיקה: "+e.message,"error"));
@@ -1000,7 +1088,7 @@ function renderDetail(){
   wrap.appendChild(table);
   host.appendChild(wrap);
 
-  renderAddParticipantModal();
+  renderParticipantModal();
 }
 
 function render(){
