@@ -255,6 +255,16 @@ const dbKorsim = korsimApp.firestore();
 const korsimAuth = korsimApp.auth();
 
 /* =========================================================
+   Public self-registration mode.
+   A course link looks like:  <site-url>/?register=<courseId>
+   When that parameter is present the page shows a public
+   sign-up form instead of the staff login + admin screens.
+   ========================================================= */
+const urlParams = new URLSearchParams(window.location.search);
+const REGISTER_COURSE_ID = urlParams.get("register");
+const IS_REGISTER_MODE = !!REGISTER_COURSE_ID;
+
+/* =========================================================
    Branch list — hardcoded from the provided branch file
    (not pulled from an external DB). To add/remove/rename a
    branch, edit this array directly.
@@ -344,6 +354,7 @@ const state = {
   unsubscribeCourses: null,
   showAddParticipant: false,
   editParticipant: null,
+  showRegLink: false,
   newSessionsCount: 4,
   user: null,
   authChecked: false,
@@ -421,6 +432,7 @@ async function createCourse(name, sessions){
   await dbKorsim.collection("courses").add({
     name: name,
     sessions: sessions,
+    registrationOpen: true,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
 }
@@ -856,6 +868,70 @@ function renderCreate(){
   host.appendChild(panel);
 }
 
+function buildRegistrationLink(courseId){
+  const base = window.location.origin + window.location.pathname;
+  return base + "?register=" + encodeURIComponent(courseId);
+}
+
+async function setRegistrationOpen(courseId, isOpen){
+  await dbKorsim.collection("courses").doc(courseId).update({ registrationOpen: isOpen });
+}
+
+function renderRegLinkModal(){
+  if(!state.showRegLink) return;
+  const course = state.currentCourse;
+  if(!course) return;
+
+  const closeModal = ()=>{ state.showRegLink = false; render(); };
+  const link = buildRegistrationLink(course.id);
+  const isOpen = course.registrationOpen !== false;
+
+  const overlay = el("div",{class:"modal-overlay", onclick:(e)=>{ if(e.target===overlay) closeModal(); }});
+  const modal = el("div",{class:"modal"});
+  modal.appendChild(el("h3",{},["קישור הרשמה עצמית"]));
+  modal.appendChild(el("div",{class:"sub", style:"color:var(--ink-soft);font-size:.85rem;margin-bottom:14px;"},[
+    "שלח את הקישור למשתתפים. הם ימלאו שם פרטי, שם משפחה, ת.ז וסניף, והרישום יתווסף אוטומטית לקורס."
+  ]));
+
+  const linkInput = el("input",{type:"text", readonly:"readonly", value:link, style:"width:100%;direction:ltr;text-align:left;"});
+  modal.appendChild(el("div",{class:"field"},[el("label",{},["הקישור"]), linkInput]));
+
+  const copyBtn = el("button",{class:"btn-primary", style:"width:100%;", onclick: async ()=>{
+    try{
+      await navigator.clipboard.writeText(link);
+      copyBtn.textContent = "הקישור הועתק ✓";
+      setTimeout(()=>{ copyBtn.textContent = "העתק קישור"; }, 2000);
+    }catch(e){
+      linkInput.select();
+      copyBtn.textContent = "סמן והעתק ידנית";
+    }
+  }},["העתק קישור"]);
+  modal.appendChild(copyBtn);
+
+  const statusLine = el("div",{style:"margin-top:16px;font-size:.85rem;"},[
+    "סטטוס הרשמה: ",
+    el("strong",{style:"color:" + (isOpen ? "var(--teal-dark)" : "var(--coral)")},[isOpen ? "פתוחה" : "סגורה"])
+  ]);
+  modal.appendChild(statusLine);
+
+  modal.appendChild(el("button",{class: isOpen ? "btn-danger" : "btn-ghost", style:"width:100%;margin-top:8px;", onclick: async ()=>{
+    try{
+      await setRegistrationOpen(course.id, !isOpen);
+      state.currentCourse = { ...course, registrationOpen: !isOpen };
+      render();
+    }catch(e){
+      showBanner("שגיאה בעדכון סטטוס ההרשמה: " + e.message, "error");
+    }
+  }},[isOpen ? "סגור הרשמה" : "פתח הרשמה"]));
+
+  const actions = el("div",{class:"modal-actions"});
+  actions.appendChild(el("button",{class:"btn-ghost", onclick: closeModal},["סגור"]));
+  modal.appendChild(actions);
+
+  overlay.appendChild(modal);
+  document.getElementById("app").appendChild(overlay);
+}
+
 function renderParticipantModal(){
   const editing = state.editParticipant;          // participant object, or null when adding
   if(!state.showAddParticipant && !editing) return;
@@ -954,6 +1030,9 @@ function renderParticipantModal(){
 function renderDetail(){
   const host = document.getElementById("viewHost");
   host.innerHTML = "";
+  // keep the open course in sync with the live courses snapshot
+  const fresh = state.courses.find(c=> c.id === state.currentCourseId);
+  if(fresh) state.currentCourse = fresh;
   const course = state.currentCourse;
   if(!course){
     host.appendChild(el("div",{class:"empty-state"},["הקורס לא נמצא."]));
@@ -968,6 +1047,7 @@ function renderDetail(){
     ]),
     el("div",{class:"detail-actions"},[
       el("button",{class:"btn-primary", onclick:()=>{ state.showAddParticipant = true; render(); }},["+ הוסף משתתף"]),
+      el("button",{class:"btn-ghost", onclick:()=>{ state.showRegLink = true; render(); }},["קישור הרשמה"]),
       el("button",{class:"btn-ghost", onclick: exportToExcel},["ייצוא לאקסל"]),
     ])
   ]);
@@ -976,6 +1056,7 @@ function renderDetail(){
   if(!state.participants.length){
     host.appendChild(el("div",{class:"empty-state"},["אין עדיין משתתפים בקורס זה. לחצו על \"הוסף משתתף\" כדי להתחיל."]));
     renderParticipantModal();
+    renderRegLinkModal();
     return;
   }
 
@@ -1089,6 +1170,7 @@ function renderDetail(){
   host.appendChild(wrap);
 
   renderParticipantModal();
+  renderRegLinkModal();
 }
 
 function render(){
@@ -1116,9 +1198,156 @@ function render(){
 /* =========================================================
    Init
    ========================================================= */
+/* ---------- Public self-registration page ---------- */
+const regState = {
+  loading: true,
+  course: null,
+  error: "",
+  submitting: false,
+  done: false,
+};
+
+function renderRegistration(){
+  const host = document.getElementById("viewHost");
+  document.getElementById("topBarActions").innerHTML = "";
+  host.innerHTML = "";
+
+  const wrap = el("div",{class:"login-wrap"});
+  const panel = el("div",{class:"login-panel"});
+
+  if(regState.loading){
+    panel.appendChild(el("h2",{},["טוען..."]));
+    panel.appendChild(el("div",{class:"sub"},["רגע אחד, טוען את פרטי הקורס."]));
+    wrap.appendChild(panel); host.appendChild(wrap);
+    return;
+  }
+
+  if(regState.error){
+    panel.appendChild(el("h2",{},["לא ניתן להירשם"]));
+    panel.appendChild(el("div",{class:"banner error"},[regState.error]));
+    wrap.appendChild(panel); host.appendChild(wrap);
+    return;
+  }
+
+  if(regState.done){
+    panel.appendChild(el("h2",{},["ההרשמה נקלטה"]));
+    panel.appendChild(el("div",{class:"banner info"},[
+      "נרשמת בהצלחה לקורס \"" + (regState.course.name || "") + "\". נתראה במפגש הראשון!"
+    ]));
+    panel.appendChild(el("button",{class:"btn-ghost", onclick:()=>{
+      regState.done = false;
+      renderRegistration();
+    }},["רישום משתתף נוסף"]));
+    wrap.appendChild(panel); host.appendChild(wrap);
+    return;
+  }
+
+  const course = regState.course;
+  panel.appendChild(el("h2",{},["הרשמה לקורס"]));
+  panel.appendChild(el("div",{class:"sub"},[course.name || ""]));
+
+  const firstInput = el("input",{type:"text", id:"r_first"});
+  const lastInput  = el("input",{type:"text", id:"r_last"});
+  const idInput    = el("input",{type:"text", id:"r_id", inputmode:"numeric", maxlength:"9"});
+
+  panel.appendChild(el("div",{class:"field"},[el("label",{},["שם פרטי"]), firstInput]));
+  panel.appendChild(el("div",{class:"field"},[el("label",{},["שם משפחה"]), lastInput]));
+  panel.appendChild(el("div",{class:"field"},[el("label",{},["ת.ז"]), idInput]));
+
+  const branchSelect = el("select",{id:"r_branch"});
+  branchSelect.appendChild(el("option",{value:""},["בחר סניף..."]));
+  state.branches.forEach(b=>{
+    const label = (b.code ? (b.code + " - ") : "") + b.name;
+    branchSelect.appendChild(el("option",{value:b.id, "data-name":label},[label]));
+  });
+  panel.appendChild(el("div",{class:"field"},[el("label",{},["מספר סניף"]), branchSelect]));
+
+  const errHost = el("div",{});
+  panel.appendChild(errHost);
+
+  const submitBtn = el("button",{class:"btn-primary", disabled: regState.submitting || undefined, onclick: async ()=>{
+    const firstName = firstInput.value.trim();
+    const lastName  = lastInput.value.trim();
+    const teudatZehut = idInput.value.trim();
+    const branchId = branchSelect.value;
+    const branchName = branchSelect.selectedOptions[0]
+      ? (branchSelect.selectedOptions[0].getAttribute("data-name") || "") : "";
+
+    errHost.innerHTML = "";
+    if(!firstName || !lastName || !teudatZehut || !branchId){
+      errHost.appendChild(el("div",{class:"banner error"},["יש למלא את כל השדות."]));
+      return;
+    }
+
+    regState.submitting = true;
+    submitBtn.disabled = true;
+    submitBtn.textContent = "שולח...";
+    try{
+      const attendance = {};
+      const sessionCount = (regState.course.sessions || []).length;
+      for(let i=0;i<sessionCount;i++){
+        attendance[i] = {start:false, end:false, startTime:"", endTime:""};
+      }
+      await dbKorsim.collection("courses").doc(REGISTER_COURSE_ID)
+        .collection("participants").add({
+          firstName, lastName, teudatZehut,
+          phone: "",
+          branchId, branchName,
+          notes: "", feedback: "",
+          attendance: attendance,
+          selfRegistered: true,
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      regState.submitting = false;
+      regState.done = true;
+      renderRegistration();
+    }catch(e){
+      regState.submitting = false;
+      submitBtn.disabled = false;
+      submitBtn.textContent = "הירשם לקורס";
+      errHost.appendChild(el("div",{class:"banner error"},["ההרשמה נכשלה: " + e.message]));
+    }
+  }},["הירשם לקורס"]);
+  panel.appendChild(submitBtn);
+
+  wrap.appendChild(panel);
+  host.appendChild(wrap);
+}
+
+async function initRegistrationMode(){
+  document.querySelector(".top-bar .sub").textContent = "טופס הרשמה";
+  await loadBranches();
+  renderRegistration();
+  try{
+    // anonymous sign-in lets the public form write without a staff account
+    if(!korsimAuth.currentUser){
+      await korsimAuth.signInAnonymously();
+    }
+    const doc = await dbKorsim.collection("courses").doc(REGISTER_COURSE_ID).get();
+    if(!doc.exists){
+      regState.error = "הקורס לא נמצא. ייתכן שהקישור שגוי או שהקורס נמחק.";
+    } else {
+      const data = doc.data();
+      if(data.registrationOpen === false){
+        regState.error = "ההרשמה לקורס זה סגורה.";
+      } else {
+        regState.course = { id: doc.id, ...data };
+      }
+    }
+  }catch(e){
+    regState.error = "שגיאה בטעינת הקורס: " + e.message;
+  }
+  regState.loading = false;
+  renderRegistration();
+}
+
+/* ---------- Staff app init ---------- */
 let dataLoadedForSession = false;
 
 korsimAuth.onAuthStateChanged((user)=>{
+  if(IS_REGISTER_MODE) return;   // public form manages its own screen
+  // an anonymous session (left over from the public form) is not a staff login
+  if(user && user.isAnonymous) user = null;
   state.authChecked = true;
   state.user = user;
   state.loginLoading = false;
@@ -1144,7 +1373,11 @@ korsimAuth.onAuthStateChanged((user)=>{
   render();
 });
 
-render();
+if(IS_REGISTER_MODE){
+  initRegistrationMode();
+} else {
+  render();
+}
 </script>
 </body>
 </html>
