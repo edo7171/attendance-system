@@ -463,6 +463,50 @@ function subscribeParticipants(courseId){
     });
 }
 
+/* ---------------------------------------------------------
+   Duplicate prevention.
+   Each course keeps a small "regKeys" subcollection whose
+   document IDs are derived from the national ID and phone.
+   A document ID can only exist once, so it acts as a uniqueness
+   lock without exposing the participant list to the public form.
+   --------------------------------------------------------- */
+function normalizeId(tz){
+  return String(tz || "").replace(/\D/g, "");
+}
+function normalizePhone(phone){
+  return String(phone || "").replace(/\D/g, "");
+}
+function regKeyIds(teudatZehut, phone){
+  const keys = [];
+  const tz = normalizeId(teudatZehut);
+  const ph = normalizePhone(phone);
+  if(tz) keys.push("id_" + tz);
+  if(ph) keys.push("phone_" + ph);
+  return keys;
+}
+function regKeysCol(courseId){
+  return dbKorsim.collection("courses").doc(courseId).collection("regKeys");
+}
+// best-effort: used by the staff screens, never blocks the main action
+async function writeRegKeys(courseId, teudatZehut, phone){
+  try{
+    const batch = dbKorsim.batch();
+    regKeyIds(teudatZehut, phone).forEach(k=>{
+      batch.set(regKeysCol(courseId).doc(k), { createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+    });
+    await batch.commit();
+  }catch(e){ console.warn("regKeys write skipped:", e.message); }
+}
+async function removeRegKeys(courseId, teudatZehut, phone){
+  try{
+    const batch = dbKorsim.batch();
+    regKeyIds(teudatZehut, phone).forEach(k=>{
+      batch.delete(regKeysCol(courseId).doc(k));
+    });
+    await batch.commit();
+  }catch(e){ console.warn("regKeys delete skipped:", e.message); }
+}
+
 async function addParticipant(courseId, data){
   const attendance = {};
   const course = state.courses.find(c=>c.id===courseId);
@@ -480,9 +524,10 @@ async function addParticipant(courseId, data){
     attendance: attendance,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
+  await writeRegKeys(courseId, data.teudatZehut, data.phone);
 }
 
-async function updateParticipantDetails(courseId, participantId, data){
+async function updateParticipantDetails(courseId, participantId, data, previous){
   await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).update({
     firstName: data.firstName,
     lastName: data.lastName,
@@ -491,10 +536,20 @@ async function updateParticipantDetails(courseId, participantId, data){
     branchId: data.branchId || "",
     branchName: data.branchName || ""
   });
+  // move the uniqueness locks if the ID or phone changed
+  if(previous){
+    const oldKeys = regKeyIds(previous.teudatZehut, previous.phone).join("|");
+    const newKeys = regKeyIds(data.teudatZehut, data.phone).join("|");
+    if(oldKeys !== newKeys){
+      await removeRegKeys(courseId, previous.teudatZehut, previous.phone);
+      await writeRegKeys(courseId, data.teudatZehut, data.phone);
+    }
+  }
 }
 
-async function deleteParticipant(courseId, participantId){
+async function deleteParticipant(courseId, participantId, participant){
   await dbKorsim.collection("courses").doc(courseId).collection("participants").doc(participantId).delete();
+  if(participant) await removeRegKeys(courseId, participant.teudatZehut, participant.phone);
 }
 
 async function updateParticipantField(courseId, participantId, field, value){
@@ -1008,7 +1063,7 @@ function renderParticipantModal(){
     saveBtn.disabled = true;
     try{
       if(editing){
-        await updateParticipantDetails(state.currentCourseId, editing.id, {firstName, lastName, teudatZehut, phone, branchId, branchName});
+        await updateParticipantDetails(state.currentCourseId, editing.id, {firstName, lastName, teudatZehut, phone, branchId, branchName}, editing);
       } else {
         await addParticipant(state.currentCourseId, {firstName, lastName, teudatZehut, phone, branchId, branchName});
       }
@@ -1158,7 +1213,7 @@ function renderDetail(){
     }},["✎"]));
     actionsTd.appendChild(el("button",{class:"icon-btn", title:"מחק משתתף", onclick:()=>{
       if(confirm("למחוק את "+(p.firstName||"")+" "+(p.lastName||"")+"?")){
-        deleteParticipant(state.currentCourseId, p.id).catch(e=>showBanner("שגיאה במחיקה: "+e.message,"error"));
+        deleteParticipant(state.currentCourseId, p.id, p).catch(e=>showBanner("שגיאה במחיקה: "+e.message,"error"));
       }
     }},["✕"]));
     tr.appendChild(actionsTd);
@@ -1243,16 +1298,17 @@ function renderRegistration(){
   }
 
   const course = regState.course;
-  panel.appendChild(el("h2",{},["הרשמה לקורס"]));
-  panel.appendChild(el("div",{class:"sub"},[course.name || ""]));
+  panel.appendChild(el("h2",{},["טופס הרשמה"]));
 
   const firstInput = el("input",{type:"text", id:"r_first"});
   const lastInput  = el("input",{type:"text", id:"r_last"});
   const idInput    = el("input",{type:"text", id:"r_id", inputmode:"numeric", maxlength:"9"});
+  const phoneInput = el("input",{type:"tel", id:"r_phone", inputmode:"tel", placeholder:"050-0000000"});
 
   panel.appendChild(el("div",{class:"field"},[el("label",{},["שם פרטי"]), firstInput]));
   panel.appendChild(el("div",{class:"field"},[el("label",{},["שם משפחה"]), lastInput]));
   panel.appendChild(el("div",{class:"field"},[el("label",{},["ת.ז"]), idInput]));
+  panel.appendChild(el("div",{class:"field"},[el("label",{},["מספר טלפון"]), phoneInput]));
 
   const branchSelect = el("select",{id:"r_branch"});
   branchSelect.appendChild(el("option",{value:""},["בחר סניף..."]));
@@ -1269,13 +1325,29 @@ function renderRegistration(){
     const firstName = firstInput.value.trim();
     const lastName  = lastInput.value.trim();
     const teudatZehut = idInput.value.trim();
+    const phone = phoneInput.value.trim();
     const branchId = branchSelect.value;
     const branchName = branchSelect.selectedOptions[0]
       ? (branchSelect.selectedOptions[0].getAttribute("data-name") || "") : "";
 
     errHost.innerHTML = "";
-    if(!firstName || !lastName || !teudatZehut || !branchId){
-      errHost.appendChild(el("div",{class:"banner error"},["יש למלא את כל השדות."]));
+    const showErr = (msg)=>{
+      errHost.innerHTML = "";
+      errHost.appendChild(el("div",{class:"banner error"},[msg]));
+    };
+
+    if(!firstName || !lastName || !teudatZehut || !phone || !branchId){
+      showErr("יש למלא את כל השדות.");
+      return;
+    }
+    const tzDigits = normalizeId(teudatZehut);
+    if(tzDigits.length !== 9){
+      showErr("מספר ת.ז צריך להכיל 9 ספרות.");
+      return;
+    }
+    const phoneDigits = normalizePhone(phone);
+    if(phoneDigits.length < 9 || phoneDigits.length > 10){
+      showErr("מספר הטלפון אינו תקין.");
       return;
     }
 
@@ -1288,16 +1360,33 @@ function renderRegistration(){
       for(let i=0;i<sessionCount;i++){
         attendance[i] = {start:false, end:false, startTime:"", endTime:""};
       }
-      await dbKorsim.collection("courses").doc(REGISTER_COURSE_ID)
-        .collection("participants").add({
-          firstName, lastName, teudatZehut,
-          phone: "",
+
+      const courseRef = dbKorsim.collection("courses").doc(REGISTER_COURSE_ID);
+      const idKeyRef    = courseRef.collection("regKeys").doc("id_" + tzDigits);
+      const phoneKeyRef = courseRef.collection("regKeys").doc("phone_" + phoneDigits);
+      const participantRef = courseRef.collection("participants").doc();
+
+      // one transaction: verify neither lock exists, then claim both
+      await dbKorsim.runTransaction(async (tx)=>{
+        const idSnap    = await tx.get(idKeyRef);
+        const phoneSnap = await tx.get(phoneKeyRef);
+        if(idSnap.exists)    throw new Error("DUP_ID");
+        if(phoneSnap.exists) throw new Error("DUP_PHONE");
+
+        tx.set(participantRef, {
+          firstName, lastName,
+          teudatZehut: tzDigits,
+          phone: phone,
           branchId, branchName,
           notes: "", feedback: "",
           attendance: attendance,
           selfRegistered: true,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
+        tx.set(idKeyRef,    { createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+        tx.set(phoneKeyRef, { createdAt: firebase.firestore.FieldValue.serverTimestamp() });
+      });
+
       regState.submitting = false;
       regState.done = true;
       renderRegistration();
@@ -1305,7 +1394,13 @@ function renderRegistration(){
       regState.submitting = false;
       submitBtn.disabled = false;
       submitBtn.textContent = "הירשם לקורס";
-      errHost.appendChild(el("div",{class:"banner error"},["ההרשמה נכשלה: " + e.message]));
+      if(e.message === "DUP_ID"){
+        showErr("מספר ת.ז זה כבר רשום לקורס.");
+      } else if(e.message === "DUP_PHONE"){
+        showErr("מספר טלפון זה כבר רשום לקורס.");
+      } else {
+        showErr("ההרשמה נכשלה: " + e.message);
+      }
     }
   }},["הירשם לקורס"]);
   panel.appendChild(submitBtn);
@@ -1314,8 +1409,21 @@ function renderRegistration(){
   host.appendChild(wrap);
 }
 
+function setRegistrationHeader(courseName){
+  const h1 = document.querySelector(".top-bar h1");
+  const sub = document.querySelector(".top-bar .sub");
+  if(courseName){
+    h1.textContent = courseName;
+    sub.textContent = "הרשמה לקורס";
+    document.title = courseName + " - הרשמה";
+  } else {
+    h1.textContent = "הרשמה לקורס";
+    sub.textContent = "";
+  }
+}
+
 async function initRegistrationMode(){
-  document.querySelector(".top-bar .sub").textContent = "טופס הרשמה";
+  setRegistrationHeader(null);
   await loadBranches();
   renderRegistration();
   try{
@@ -1332,6 +1440,7 @@ async function initRegistrationMode(){
         regState.error = "ההרשמה לקורס זה סגורה.";
       } else {
         regState.course = { id: doc.id, ...data };
+        setRegistrationHeader(data.name || "");
       }
     }
   }catch(e){
